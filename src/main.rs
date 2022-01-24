@@ -267,15 +267,10 @@ fn load_or_random(var: &str, rng : &dyn rand::SecureRandom) -> [u8; 32] {
         }
         Err(msg) => {
             println!("{}", msg);
-            match random_32(rng) {
-                Ok(val) => {
-                    println!("Loading a random key for {}", var);
-                    val
-                }
-                Err(msg) => {
-                    panic!("{}", msg);
-                }
-            }
+            println!("Attempting to load a random key for {}", var);
+            let key = random_32(rng).unwrap();
+            println!("Consider setting {}={} in the environment or .env file", var, Base64UrlUnpadded::encode_string(&key));
+            key
         }
     }
 }
