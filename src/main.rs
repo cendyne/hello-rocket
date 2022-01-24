@@ -260,14 +260,14 @@ fn random_32(rng: &dyn rand::SecureRandom) -> Result<[u8; 32], String> {
     Ok(result)
 }
 
-fn load_or_random(var: &str, rng : &dyn rand::SecureRandom) -> [u8; 32] {
-    load_key(var).or_else::<String, _>(|msg| {
+fn load_or_random(var: &str, rng : &dyn rand::SecureRandom) -> Result<[u8; 32], String> {
+    load_key(var).or_else(|msg| {
         println!("{}", msg);
         println!("Attempting to load a random key for {}", var);
         let key = random_32(rng)?;
         println!("Consider setting {}={} in the environment or .env file", var, Base64UrlUnpadded::encode_string(&key));
         Ok(key)
-    }).unwrap()
+    })
 }
 
 #[launch]
@@ -275,8 +275,8 @@ fn rocket() -> _ {
     dotenv::dotenv().ok();
 
     let rng = rand::SystemRandom::new();
-    let encryption_key = load_or_random("ENCRYPTION_KEY", &rng);
-    let signing_key = load_or_random("SIGNING_KEY", &rng);
+    let encryption_key = load_or_random("ENCRYPTION_KEY", &rng).unwrap();
+    let signing_key = load_or_random("SIGNING_KEY", &rng).unwrap();
     // let rng2 : &dyn rand::SecureRandom = &rng;
     // const KEY_LEN : usize = 32;
     // let mut key_bytes : [u8; KEY_LEN] = [0; KEY_LEN];
