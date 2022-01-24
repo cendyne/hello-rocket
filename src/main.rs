@@ -1,12 +1,13 @@
-#[macro_use] extern crate rocket;
-use rocket::tokio::time::{sleep, Duration};
-use ring::{rand,aead};
-use std::sync::{Arc, Mutex};
-use rocket::State;
-use std::vec;
-use base64ct::{Base64UrlUnpadded, Encoding};
+#[macro_use]
+extern crate rocket;
 use argon2::{self, Config};
+use base64ct::{Base64UrlUnpadded, Encoding};
+use ring::{aead, rand};
+use rocket::tokio::time::{sleep, Duration};
+use rocket::State;
 use std::env;
+use std::sync::{Arc, Mutex};
+use std::vec;
 
 #[get("/")]
 fn index() -> &'static str {
@@ -22,7 +23,8 @@ async fn sleeping() -> &'static str {
 #[get("/rando")]
 fn rando(rng: &State<rand::SystemRandom>) -> Result<String, String> {
     let key_value: [u8; 32] = rand::generate(rng.inner())
-        .map_err(|_| "gen random failed")?.expose();
+        .map_err(|_| "gen random failed")?
+        .expose();
     let encoded = Base64UrlUnpadded::encode_string(&key_value);
     Ok(encoded)
 }
@@ -39,27 +41,30 @@ fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> String {
 
 #[get("/verify/<param>")]
 fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
-    let message = Base64UrlUnpadded::decode_vec(param)
-        .map_err(|_| "Invalid Base64 input")?;
+    let message = Base64UrlUnpadded::decode_vec(param).map_err(|_| "Invalid Base64 input")?;
     let hash_length = hmac_key.length();
     let message_length = message.len();
     if message_length <= hash_length {
         return Err("Insufficient Length".to_string());
     }
     let length = message_length - hash_length;
-    let mut tag : [u8; 32] = [0; 32];
-    tag.copy_from_slice(&message[length..length+32]);
+    let mut tag: [u8; 32] = [0; 32];
+    tag.copy_from_slice(&message[length..length + 32]);
     hmac_key.verify(&message[0..length], tag)?;
-    let text = std::str::from_utf8(&message[0..length])
-        .map_err(|e| format!("{}", e))?;
+    let text = std::str::from_utf8(&message[0..length]).map_err(|e| format!("{}", e))?;
     Ok(format!("{} -> {}", param, text))
 }
 
 #[get("/secret/<param>/<aad>")]
-fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -> Result<String, String> {
+fn secretbox(
+    param: &str,
+    aad: &str,
+    encrypt: &State<Arc<Mutex<SealingState>>>,
+) -> Result<String, String> {
     let aadbytes = aad.as_bytes();
     let additional_data = aead::Aad::from(&aadbytes);
-    let mut encrypt_key = encrypt.lock()
+    let mut encrypt_key = encrypt
+        .lock()
         .map_err(|_| "Could not obtain encryption key")?;
 
     let mut message = vec![0; param.len()];
@@ -67,28 +72,38 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) 
     let sealing_key_with_nonce = encrypt_key.sealing_key()?;
     let mut sealing_key = sealing_key_with_nonce.0;
     let sealing_nonce = sealing_key_with_nonce.1;
-    let tag = sealing_key.seal_in_place_separate_tag(additional_data, &mut message)
+    let tag = sealing_key
+        .seal_in_place_separate_tag(additional_data, &mut message)
         .map_err(|_| "Could not seal in place")?;
-    
-    println!("Nonce: {:?}, Message {:?}, Tag {:?}", sealing_nonce, message, tag.as_ref());
+
+    println!(
+        "Nonce: {:?}, Message {:?}, Tag {:?}",
+        sealing_nonce,
+        message,
+        tag.as_ref()
+    );
     let mut final_message = vec![];
     final_message.extend_from_slice(&sealing_nonce);
     final_message.append(&mut message);
     final_message.extend_from_slice(tag.as_ref());
-    
+
     // let encoded = Base64::encode_string(message);
     let encoded = Base64UrlUnpadded::encode_string(&final_message);
     Ok(format!("Secret is {} and result: {}", param, encoded))
 }
 
 #[get("/open/<secret>/<aad>")]
-fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -> Result<String, String> {
+fn openbox(
+    secret: &str,
+    aad: &str,
+    encrypt: &State<Arc<Mutex<SealingState>>>,
+) -> Result<String, String> {
     let aadbytes = aad.as_bytes();
-    let message = Base64UrlUnpadded::decode_vec(secret)
-        .map_err(|_| "Could not decode")?;
+    let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
     println!("Got message {:x?}", message);
     let additional_data = aead::Aad::from(&aadbytes);
-    let mut encrypt_key = encrypt.lock()
+    let mut encrypt_key = encrypt
+        .lock()
         .map_err(|_| "Could not obtain encryption key")?;
     let message_length = message.len();
     let tag_length = encrypt_key.algorithm.tag_len();
@@ -96,7 +111,7 @@ fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -
         return Err("Insufficient Length".to_string());
     }
     let length = message_length - tag_length - aead::NONCE_LEN;
-    let mut nonce : [u8; aead::NONCE_LEN] = [0;aead::NONCE_LEN];
+    let mut nonce: [u8; aead::NONCE_LEN] = [0; aead::NONCE_LEN];
     nonce.copy_from_slice(&message[0..aead::NONCE_LEN]);
     println!("Nonce found {:?}", nonce);
     let mut offset_message = vec![];
@@ -104,7 +119,8 @@ fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -
     println!("Message found {:?}", &offset_message[0..length]);
     println!("Tag found {:?}", &offset_message[length..]);
     let mut opening_key = encrypt_key.opening_key(nonce)?;
-    let result = opening_key.open_in_place(additional_data, &mut offset_message)
+    let result = opening_key
+        .open_in_place(additional_data, &mut offset_message)
         .map_err(|_| "could not open message")?;
     let text = std::str::from_utf8(&result[0..length]).map_err(|e| format!("{}", e))?;
     Ok(format!("Secret is {} and length is {}", text, length))
@@ -115,19 +131,19 @@ fn password(secret: &str, rng: &State<rand::SystemRandom>) -> Result<String, Str
     use rocket::http::RawStr;
     let pwd = secret.as_bytes();
     let salt: [u8; 16] = rand::generate(rng.inner())
-        .map_err(|_| "gen random failed")?.expose();
+        .map_err(|_| "gen random failed")?
+        .expose();
     let config = Config::default();
-    let encoded = argon2::hash_encoded(pwd, &salt, &config)
-        .map_err(|_| "Could not encode password")?;
+    let encoded =
+        argon2::hash_encoded(pwd, &salt, &config).map_err(|_| "Could not encode password")?;
     let encoded: &RawStr = RawStr::new(&encoded);
     Ok(format!("{}", RawStr::percent_encode(encoded)))
 }
 
-#[get("/verify-password/<secret>/<encoded>"q)]
+#[get("/verify-password/<secret>/<encoded>")]
 fn verify_password(secret: &str, encoded: &str) -> Result<String, String> {
     let pwd = secret.as_bytes();
-    argon2::verify_encoded(encoded, pwd)
-        .map_err(|_| "Could not encode password")?;
+    argon2::verify_encoded(encoded, pwd).map_err(|_| "Could not encode password")?;
     Ok(format!("{} is the password for {}", secret, encoded))
 }
 
@@ -150,7 +166,7 @@ struct SealingState {
     algorithm: &'static aead::Algorithm,
     key_material: Vec<u8>,
     rng: rand::SystemRandom,
-    nonce: [u8; aead::NONCE_LEN]
+    nonce: [u8; aead::NONCE_LEN],
 }
 
 struct SealingKeyWithNonce(aead::SealingKey<OneNonceSequence>, [u8; aead::NONCE_LEN]);
@@ -159,16 +175,17 @@ impl SealingState {
     fn new(algorithm: &'static aead::Algorithm, key: &[u8]) -> Result<Self, String> {
         let rng = rand::SystemRandom::new();
         let mut bytes: [u8; 12] = [0; 12];
-        let rng2 : &dyn rand::SecureRandom = &rng;
-        rng2.fill(&mut bytes[0..8]).map_err(|_| "Could not init nonce")?;
+        let rng2: &dyn rand::SecureRandom = &rng;
+        rng2.fill(&mut bytes[0..8])
+            .map_err(|_| "Could not init nonce")?;
         let mut key_material = vec![0; key.len()];
         key_material.copy_from_slice(key);
-        
+
         Ok(Self {
             algorithm,
             key_material,
             rng,
-            nonce: bytes
+            nonce: bytes,
         })
     }
 
@@ -190,8 +207,9 @@ impl SealingState {
         }
         // Refresh nonce after 2^32 times
         if refresh {
-            let rng2 : &dyn rand::SecureRandom = &self.rng;
-            rng2.fill(&mut self.nonce[0..8]).map_err(|_| "Could not init nonce")?;
+            let rng2: &dyn rand::SecureRandom = &self.rng;
+            rng2.fill(&mut self.nonce[0..8])
+                .map_err(|_| "Could not init nonce")?;
             self.nonce[8] = 0;
             self.nonce[9] = 0;
             self.nonce[10] = 0;
@@ -207,10 +225,16 @@ impl SealingState {
         let next_nonce = self.next_nonce()?;
 
         let nonce = OneNonceSequence::new(next_nonce);
-        Ok(SealingKeyWithNonce(aead::BoundKey::new(unbound, nonce), next_nonce))
+        Ok(SealingKeyWithNonce(
+            aead::BoundKey::new(unbound, nonce),
+            next_nonce,
+        ))
     }
 
-    fn opening_key(&mut self, nonce: [u8; aead::NONCE_LEN]) -> Result<aead::OpeningKey<OneNonceSequence>, String> {
+    fn opening_key(
+        &mut self,
+        nonce: [u8; aead::NONCE_LEN],
+    ) -> Result<aead::OpeningKey<OneNonceSequence>, String> {
         let unbound = aead::UnboundKey::new(self.algorithm, &self.key_material)
             .map_err(|_| "Could not create key")?;
         let nonce = OneNonceSequence::new(nonce);
@@ -220,7 +244,7 @@ impl SealingState {
 
 struct KeyedHash([u8; 32]);
 impl KeyedHash {
-    fn new(key : [u8; 32]) -> KeyedHash {
+    fn new(key: [u8; 32]) -> KeyedHash {
         Self(key)
     }
     fn sign(&self, data: &[u8]) -> blake3::Hash {
@@ -241,31 +265,38 @@ impl KeyedHash {
 }
 
 fn load_key(var: &str) -> Result<[u8; 32], String> {
-    let res = env::var(var)
-        .map_err(|e| format!("Failed to load {}: {}", var, e))?;
+    let res = env::var(var).map_err(|e| format!("Failed to load {}: {}", var, e))?;
     let message = Base64UrlUnpadded::decode_vec(&res)
         .map_err(|_| format!("Failed to load {}, expected base64 string", var))?;
     if message.len() == 32 {
-        let mut result : [u8;32] = [0; 32];
+        let mut result: [u8; 32] = [0; 32];
         result.copy_from_slice(&message);
         Ok(result)
     } else {
-        Err(format!("Failed to load {}, it has length {} but 32 bytes are expected", var, message.len()))
+        Err(format!(
+            "Failed to load {}, it has length {} but 32 bytes are expected",
+            var,
+            message.len()
+        ))
     }
 }
 
 fn random_32(rng: &dyn rand::SecureRandom) -> Result<[u8; 32], String> {
-    let mut result : [u8;32] = [0; 32];
+    let mut result: [u8; 32] = [0; 32];
     rng.fill(&mut result).map_err(|_| "Could not init nonce")?;
     Ok(result)
 }
 
-fn load_or_random(var: &str, rng : &dyn rand::SecureRandom) -> Result<[u8; 32], String> {
+fn load_or_random(var: &str, rng: &dyn rand::SecureRandom) -> Result<[u8; 32], String> {
     load_key(var).or_else(|msg| {
         println!("{}", msg);
         println!("Attempting to load a random key for {}", var);
         let key = random_32(rng)?;
-        println!("Consider setting {}={} in the environment or .env file", var, Base64UrlUnpadded::encode_string(&key));
+        println!(
+            "Consider setting {}={} in the environment or .env file",
+            var,
+            Base64UrlUnpadded::encode_string(&key)
+        );
         Ok(key)
     })
 }
@@ -298,13 +329,26 @@ fn rocket() -> _ {
     // // sealing.algorithm().tag_len();
 
     rocket::build()
-    .manage(rng)
-    // .manage(hmac_key)
-    .manage(KeyedHash::new(signing_key))
-    // .manage(Arc::new(Mutex::new(sealing)))
-    // .manage(Arc::new(Mutex::new(opening)))
-    .manage(Arc::new(Mutex::new(sealing_state)))
-    .mount("/", routes![index, sleeping, rando, sign_thing, verify_thing, secretbox, openbox, password, verify_password])
-    .mount("/hello", routes![index])
-    .attach(rocket::shield::Shield::new())
+        .manage(rng)
+        // .manage(hmac_key)
+        .manage(KeyedHash::new(signing_key))
+        // .manage(Arc::new(Mutex::new(sealing)))
+        // .manage(Arc::new(Mutex::new(opening)))
+        .manage(Arc::new(Mutex::new(sealing_state)))
+        .mount(
+            "/",
+            routes![
+                index,
+                sleeping,
+                rando,
+                sign_thing,
+                verify_thing,
+                secretbox,
+                openbox,
+                password,
+                verify_password
+            ],
+        )
+        .mount("/hello", routes![index])
+        .attach(rocket::shield::Shield::new())
 }
