@@ -41,7 +41,8 @@ fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> String {
 
 #[get("/verify/<param>")]
 fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
-    let message = Base64UrlUnpadded::decode_vec(&param).unwrap();
+    let message = Base64UrlUnpadded::decode_vec(&param)
+        .map_err(|_| "Invalid Base64 input")?;
     let hash_length = hmac_key.length();
     let length = message.len() - hash_length;
     if length <= 0 {
@@ -59,7 +60,8 @@ fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, Stri
 fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -> Result<String, String> {
     let aadbytes = aad.as_bytes();
     let additional_data = aead::Aad::from(&aadbytes);
-    let mut encrypt_key = encrypt.lock().unwrap();
+    let mut encrypt_key = encrypt.lock()
+        .map_err(|_| "Could not obtain encryption key")?;
 
     let mut message = vec![0; param.len()];
     message.copy_from_slice(&param.as_bytes());
@@ -83,10 +85,12 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) 
 #[get("/open/<secret>/<aad>")]
 fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -> Result<String, String> {
     let aadbytes = aad.as_bytes();
-    let message = Base64UrlUnpadded::decode_vec(&secret).map_err(|_| "Could not decode")?;
+    let message = Base64UrlUnpadded::decode_vec(&secret)
+        .map_err(|_| "Could not decode")?;
     println!("Got message {:x?}", message);
     let additional_data = aead::Aad::from(&aadbytes);
-    let mut encrypt_key = encrypt.lock().unwrap();
+    let mut encrypt_key = encrypt.lock()
+        .map_err(|_| "Could not obtain encryption key")?;
     let length = message.len() - encrypt_key.algorithm.tag_len() - aead::NONCE_LEN;
     if length <= 0 {
         return Err("Insufficient Length".to_string());
@@ -288,7 +292,8 @@ fn rocket() -> _ {
     // rng2.fill(&mut key_bytes).expect("Filled random");
     // println!("Key {:?}", key_bytes);
     // let hmac_key = hmac::Key::new(hmac::HMAC_SHA256, &SIGN_KEY);
-    let sealing_state = SealingState::new(&aead::CHACHA20_POLY1305, &encryption_key).expect("Set up key");
+    let sealing_state = SealingState::new(&aead::CHACHA20_POLY1305, &encryption_key)
+        .expect("Encryption key failed to set up");
     // let unbound = aead::UnboundKey::new().expect("Made a key");
     // let nonce_bytes : [u8; 8] = [0; 8];
     // let nonce_seq = CounterNonceSequence::new(nonce_bytes);
