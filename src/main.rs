@@ -42,11 +42,11 @@ fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, Stri
     let message = Base64UrlUnpadded::decode_vec(param)
         .map_err(|_| "Invalid Base64 input")?;
     let hash_length = hmac_key.length();
-    let length = (message.len() as isize) - (hash_length as isize);
-    if length <= 0 {
+    let message_length = message.len();
+    if message_length <= hash_length {
         return Err("Insufficient Length".to_string());
     }
-    let length = length as usize;
+    let length = message_length - hash_length;
     let mut tag : [u8; 32] = [0; 32];
     tag.copy_from_slice(&message[length..length+32]);
     hmac_key.verify(&message[0..length], tag)?;
@@ -90,11 +90,12 @@ fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -
     let additional_data = aead::Aad::from(&aadbytes);
     let mut encrypt_key = encrypt.lock()
         .map_err(|_| "Could not obtain encryption key")?;
-    let length = (message.len() as isize) - (encrypt_key.algorithm.tag_len() as isize) - (aead::NONCE_LEN as isize);
-    if length <= 0 {
+    let message_length = message.len();
+    let tag_length = encrypt_key.algorithm.tag_len();
+    if message_length <= tag_length + aead::NONCE_LEN {
         return Err("Insufficient Length".to_string());
     }
-    let length = length as usize;
+    let length = message_length - tag_length - aead::NONCE_LEN;
     let mut nonce : [u8; aead::NONCE_LEN] = [0;aead::NONCE_LEN];
     nonce.copy_from_slice(&message[0..aead::NONCE_LEN]);
     println!("Nonce found {:?}", nonce);
