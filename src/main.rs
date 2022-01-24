@@ -5,9 +5,7 @@ use std::sync::{Arc, Mutex};
 use rocket::State;
 use std::vec;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use blake3;
 use argon2::{self, Config};
-use dotenv;
 use std::env;
 
 #[get("/")]
@@ -26,14 +24,14 @@ fn rando(rng: &State<rand::SystemRandom>) -> Result<String, String> {
     let key_value: [u8; 32] = rand::generate(rng.inner())
         .map_err(|_| "gen random failed")?.expose();
     let encoded = Base64UrlUnpadded::encode_string(&key_value);
-    Ok(format!("{}", encoded))
+    Ok(encoded)
 }
 
 #[get("/sign/<param>")]
 fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> String {
     let tag = hmac_key.sign(param.as_bytes());
     let mut message = vec![];
-    message.extend_from_slice(&param.as_bytes());
+    message.extend_from_slice(param.as_bytes());
     message.extend_from_slice(tag.as_bytes());
     let encoded = Base64UrlUnpadded::encode_string(&message);
     format!("{} -> {}", param, encoded)
@@ -41,13 +39,14 @@ fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> String {
 
 #[get("/verify/<param>")]
 fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
-    let message = Base64UrlUnpadded::decode_vec(&param)
+    let message = Base64UrlUnpadded::decode_vec(param)
         .map_err(|_| "Invalid Base64 input")?;
     let hash_length = hmac_key.length();
-    let length = message.len() - hash_length;
+    let length = (message.len() as isize) - (hash_length as isize);
     if length <= 0 {
         return Err("Insufficient Length".to_string());
     }
+    let length = length as usize;
     let mut tag : [u8; 32] = [0; 32];
     tag.copy_from_slice(&message[length..length+32]);
     hmac_key.verify(&message[0..length], tag)?;
@@ -64,7 +63,7 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) 
         .map_err(|_| "Could not obtain encryption key")?;
 
     let mut message = vec![0; param.len()];
-    message.copy_from_slice(&param.as_bytes());
+    message.copy_from_slice(param.as_bytes());
     let sealing_key_with_nonce = encrypt_key.sealing_key()?;
     let mut sealing_key = sealing_key_with_nonce.0;
     let sealing_nonce = sealing_key_with_nonce.1;
@@ -75,7 +74,7 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) 
     let mut final_message = vec![];
     final_message.extend_from_slice(&sealing_nonce);
     final_message.append(&mut message);
-    final_message.extend_from_slice(&tag.as_ref());
+    final_message.extend_from_slice(tag.as_ref());
     
     // let encoded = Base64::encode_string(message);
     let encoded = Base64UrlUnpadded::encode_string(&final_message);
@@ -85,16 +84,17 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) 
 #[get("/open/<secret>/<aad>")]
 fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<Mutex<SealingState>>>) -> Result<String, String> {
     let aadbytes = aad.as_bytes();
-    let message = Base64UrlUnpadded::decode_vec(&secret)
+    let message = Base64UrlUnpadded::decode_vec(secret)
         .map_err(|_| "Could not decode")?;
     println!("Got message {:x?}", message);
     let additional_data = aead::Aad::from(&aadbytes);
     let mut encrypt_key = encrypt.lock()
         .map_err(|_| "Could not obtain encryption key")?;
-    let length = message.len() - encrypt_key.algorithm.tag_len() - aead::NONCE_LEN;
+    let length = (message.len() as isize) - (encrypt_key.algorithm.tag_len() as isize) - (aead::NONCE_LEN as isize);
     if length <= 0 {
         return Err("Insufficient Length".to_string());
     }
+    let length = length as usize;
     let mut nonce : [u8; aead::NONCE_LEN] = [0;aead::NONCE_LEN];
     nonce.copy_from_slice(&message[0..aead::NONCE_LEN]);
     println!("Nonce found {:?}", nonce);
@@ -119,15 +119,15 @@ fn password(secret: &str, rng: &State<rand::SystemRandom>) -> Result<String, Str
     let encoded = argon2::hash_encoded(pwd, &salt, &config)
         .map_err(|_| "Could not encode password")?;
     let encoded: &RawStr = RawStr::new(&encoded);
-    Ok(format!("{}", RawStr::percent_encode(&encoded)))
+    Ok(format!("{}", RawStr::percent_encode(encoded)))
 }
 
-#[get("/verify-password/<secret>/<encoded>")]
+#[get("/verify-password/<secret>/<encoded>"q)]
 fn verify_password(secret: &str, encoded: &str) -> Result<String, String> {
     let pwd = secret.as_bytes();
-    argon2::verify_encoded(&encoded, pwd)
+    argon2::verify_encoded(encoded, pwd)
         .map_err(|_| "Could not encode password")?;
-    Ok(format!("{} is the password for {}",secret, encoded))
+    Ok(format!("{} is the password for {}", secret, encoded))
 }
 
 struct OneNonceSequence(Option<aead::Nonce>);
@@ -161,12 +161,12 @@ impl SealingState {
         let rng2 : &dyn rand::SecureRandom = &rng;
         rng2.fill(&mut bytes[0..8]).map_err(|_| "Could not init nonce")?;
         let mut key_material = vec![0; key.len()];
-        key_material.copy_from_slice(&key);
+        key_material.copy_from_slice(key);
         
         Ok(Self {
-            algorithm: algorithm,
-            key_material: key_material,
-            rng: rng,
+            algorithm,
+            key_material,
+            rng,
             nonce: bytes
         })
     }
@@ -206,14 +206,14 @@ impl SealingState {
         let next_nonce = self.next_nonce()?;
 
         let nonce = OneNonceSequence::new(next_nonce);
-        return Ok(SealingKeyWithNonce(aead::BoundKey::new(unbound, nonce), next_nonce));
+        Ok(SealingKeyWithNonce(aead::BoundKey::new(unbound, nonce), next_nonce))
     }
 
     fn opening_key(&mut self, nonce: [u8; aead::NONCE_LEN]) -> Result<aead::OpeningKey<OneNonceSequence>, String> {
         let unbound = aead::UnboundKey::new(self.algorithm, &self.key_material)
             .map_err(|_| "Could not create key")?;
         let nonce = OneNonceSequence::new(nonce);
-        return Ok(aead::BoundKey::new(unbound, nonce));
+        Ok(aead::BoundKey::new(unbound, nonce))
     }
 }
 
