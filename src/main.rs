@@ -12,7 +12,7 @@ mod stuff;
 use stuff::blindindex::{blind_index, IndexType};
 use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
 use stuff::keyedhash::KeyedHash;
-use stuff::secret::SealingState;
+use stuff::secret::{open_secret, seal_secret, SealingState};
 
 #[get("/")]
 fn index() -> &'static str {
@@ -66,31 +66,11 @@ fn secretbox(
     aad: &str,
     encrypt: &State<Arc<Mutex<SealingState>>>,
 ) -> Result<String, String> {
-    let aadbytes = aad.as_bytes();
-    let additional_data = aead::Aad::from(&aadbytes);
     let mut encrypt_key = encrypt
         .lock()
         .map_err(|_| "Could not obtain encryption key")?;
 
-    let mut message = vec![0; param.len()];
-    message.copy_from_slice(param.as_bytes());
-    let sealing_key_with_nonce = encrypt_key.sealing_key()?;
-    let mut sealing_key = sealing_key_with_nonce.0;
-    let sealing_nonce = sealing_key_with_nonce.1;
-    let tag = sealing_key
-        .seal_in_place_separate_tag(additional_data, &mut message)
-        .map_err(|_| "Could not seal in place")?;
-
-    println!(
-        "Nonce: {:?}, Message {:?}, Tag {:?}",
-        sealing_nonce,
-        message,
-        tag.as_ref()
-    );
-    let mut final_message = vec![];
-    final_message.extend_from_slice(&sealing_nonce);
-    final_message.append(&mut message);
-    final_message.extend_from_slice(tag.as_ref());
+    let final_message = seal_secret(param.as_bytes(), aad.as_bytes(), &mut encrypt_key)?;
 
     // let encoded = Base64::encode_string(message);
     let encoded = Base64UrlUnpadded::encode_string(&final_message);
@@ -103,32 +83,18 @@ fn openbox(
     aad: &str,
     encrypt: &State<Arc<Mutex<SealingState>>>,
 ) -> Result<String, String> {
-    let aadbytes = aad.as_bytes();
     let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
     println!("Got message {:x?}", message);
-    let additional_data = aead::Aad::from(&aadbytes);
     let encrypt_key = encrypt
         .lock()
         .map_err(|_| "Could not obtain encryption key")?;
-    let message_length = message.len();
-    let tag_length = encrypt_key.algorithm.tag_len();
-    if message_length <= tag_length + aead::NONCE_LEN {
-        return Err("Insufficient Length".to_string());
-    }
-    let length = message_length - tag_length - aead::NONCE_LEN;
-    let mut nonce: [u8; aead::NONCE_LEN] = [0; aead::NONCE_LEN];
-    nonce.copy_from_slice(&message[0..aead::NONCE_LEN]);
-    println!("Nonce found {:?}", nonce);
-    let mut offset_message = vec![];
-    offset_message.extend_from_slice(&message[aead::NONCE_LEN..]);
-    println!("Message found {:?}", &offset_message[0..length]);
-    println!("Tag found {:?}", &offset_message[length..]);
-    let mut opening_key = encrypt_key.opening_key(nonce)?;
-    let result = opening_key
-        .open_in_place(additional_data, &mut offset_message)
-        .map_err(|_| "could not open message")?;
-    let text = std::str::from_utf8(&result[0..length]).map_err(|e| format!("{}", e))?;
-    Ok(format!("Secret is {} and length is {}", text, length))
+    let decrypted = open_secret(&message[..], aad.as_bytes(), &*encrypt_key)?;
+    let text = std::str::from_utf8(&decrypted[..]).map_err(|e| format!("{}", e))?;
+    Ok(format!(
+        "Secret is {} and length is {}",
+        text,
+        decrypted.len()
+    ))
 }
 
 #[get("/password/<secret>")]
