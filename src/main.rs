@@ -84,7 +84,7 @@ fn openbox(
     encrypt: &State<Arc<Mutex<SealingState>>>,
 ) -> Result<String, String> {
     let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
-    println!("Got message {:x?}", message);
+    // println!("Got message {:x?}", message);
     let encrypt_key = encrypt
         .lock()
         .map_err(|_| "Could not obtain encryption key")?;

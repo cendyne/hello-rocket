@@ -98,11 +98,11 @@ pub fn open_secret(
     let length = message_length - tag_length - aead::NONCE_LEN;
     let mut nonce: [u8; aead::NONCE_LEN] = [0; aead::NONCE_LEN];
     nonce.copy_from_slice(&message[0..aead::NONCE_LEN]);
-    println!("Nonce found {:?}", nonce);
+    // println!("Nonce found {:?}", nonce);
     let mut offset_message = vec![];
     offset_message.extend_from_slice(&message[aead::NONCE_LEN..]);
-    println!("Message found {:?}", &offset_message[0..length]);
-    println!("Tag found {:?}", &offset_message[length..]);
+    // println!("Message found {:?}", &offset_message[0..length]);
+    // println!("Tag found {:?}", &offset_message[length..]);
     let mut opening_key = encrypt_key.opening_key(nonce)?;
     let result = opening_key
         .open_in_place(additional_data, &mut offset_message)
@@ -123,19 +123,23 @@ pub fn seal_secret(
     let sealing_key_with_nonce = encrypt_key.sealing_key()?;
     let mut sealing_key = sealing_key_with_nonce.0;
     let sealing_nonce = sealing_key_with_nonce.1;
-    let tag = sealing_key
-        .seal_in_place_separate_tag(additional_data, &mut cloned)
-        .map_err(|_| "Could not seal in place")?;
-
-    println!(
-        "Nonce: {:?}, Message {:?}, Tag {:?}",
-        sealing_nonce,
-        message,
-        tag.as_ref()
-    );
     let mut final_message = vec![];
+    final_message.reserve(sealing_nonce.len() + message.len() + encrypt_key.algorithm.tag_len());
     final_message.extend_from_slice(&sealing_nonce);
-    final_message.append(&mut cloned);
+    final_message.extend_from_slice(message);
+
+    let tag = sealing_key
+        .seal_in_place_separate_tag(additional_data, &mut final_message[sealing_nonce.len()..])
+        .map_err(|_| "Could not seal in place")?;
     final_message.extend_from_slice(tag.as_ref());
+
+    // println!(
+    //     "Nonce: {:?}, Message {:?}, Tag {:?}",
+    //     sealing_nonce,
+    //     message,
+    //     tag.as_ref()
+    // );
+    // println!("Finally: {:?}", final_message);
+
     Ok(final_message)
 }
