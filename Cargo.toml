@@ -14,3 +14,4 @@ base64ct = {version = "1.0.1", features = ["alloc", "std"]}
 ring = "0.17.0-alpha.11"
 hex = "0.4.3"
 dotenv = "0.15.0" 
+dashmap = "5.0.0"

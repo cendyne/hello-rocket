@@ -8,6 +8,11 @@ use rocket::State;
 use std::env;
 use std::sync::{Arc, Mutex};
 use std::vec;
+mod stuff;
+use stuff::blindindex::{blind_index, IndexType};
+use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
+use stuff::keyedhash::KeyedHash;
+use stuff::secret::SealingState;
 
 #[get("/")]
 fn index() -> &'static str {
@@ -102,7 +107,7 @@ fn openbox(
     let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
     println!("Got message {:x?}", message);
     let additional_data = aead::Aad::from(&aadbytes);
-    let mut encrypt_key = encrypt
+    let encrypt_key = encrypt
         .lock()
         .map_err(|_| "Could not obtain encryption key")?;
     let message_length = message.len();
@@ -147,120 +152,53 @@ fn verify_password(secret: &str, encoded: &str) -> Result<String, String> {
     Ok(format!("{} is the password for {}", secret, encoded))
 }
 
-struct OneNonceSequence(Option<aead::Nonce>);
-
-impl OneNonceSequence {
-    fn new(nonce: [u8; aead::NONCE_LEN]) -> Self {
-        let nonce = aead::Nonce::assume_unique_for_key(nonce);
-        Self(Some(nonce))
-    }
-}
-
-impl aead::NonceSequence for OneNonceSequence {
-    fn advance(&mut self) -> Result<aead::Nonce, ring::error::Unspecified> {
-        self.0.take().ok_or(ring::error::Unspecified)
-    }
-}
-
-struct SealingState {
-    algorithm: &'static aead::Algorithm,
-    key_material: Vec<u8>,
-    rng: rand::SystemRandom,
-    nonce: [u8; aead::NONCE_LEN],
-}
-
-struct SealingKeyWithNonce(aead::SealingKey<OneNonceSequence>, [u8; aead::NONCE_LEN]);
-
-impl SealingState {
-    fn new(algorithm: &'static aead::Algorithm, key: &[u8]) -> Result<Self, String> {
-        let rng = rand::SystemRandom::new();
-        let mut bytes: [u8; 12] = [0; 12];
-        let rng2: &dyn rand::SecureRandom = &rng;
-        rng2.fill(&mut bytes[0..8])
-            .map_err(|_| "Could not init nonce")?;
-        let mut key_material = vec![0; key.len()];
-        key_material.copy_from_slice(key);
-
-        Ok(Self {
-            algorithm,
-            key_material,
-            rng,
-            nonce: bytes,
-        })
-    }
-
-    fn next_nonce(&mut self) -> Result<[u8; aead::NONCE_LEN], String> {
-        let mut nonce = [0; aead::NONCE_LEN];
-        nonce.clone_from_slice(&self.nonce);
-        let mut refresh = false;
-        for i in [11, 10, 9, 8] {
-            if self.nonce[i] == 255 {
-                self.nonce[i] = 0;
-                if i == 8 {
-                    refresh = true;
-                    break;
-                }
-            } else {
-                self.nonce[i] += 1;
-                break;
-            }
-        }
-        // Refresh nonce after 2^32 times
-        if refresh {
-            let rng2: &dyn rand::SecureRandom = &self.rng;
-            rng2.fill(&mut self.nonce[0..8])
-                .map_err(|_| "Could not init nonce")?;
-            self.nonce[8] = 0;
-            self.nonce[9] = 0;
-            self.nonce[10] = 0;
-            self.nonce[11] = 0;
-        }
-        println!("Next nonce: {:x?}", self.nonce);
-        Ok(nonce)
-    }
-
-    fn sealing_key(&mut self) -> Result<SealingKeyWithNonce, String> {
-        let unbound = aead::UnboundKey::new(self.algorithm, &self.key_material)
-            .map_err(|_| "Could not create key")?;
-        let next_nonce = self.next_nonce()?;
-
-        let nonce = OneNonceSequence::new(next_nonce);
-        Ok(SealingKeyWithNonce(
-            aead::BoundKey::new(unbound, nonce),
-            next_nonce,
+#[get("/table/<table>/<column>/<value>?<sensitive>&<partial>&<secret>")]
+fn table_value(
+    table: &str,
+    column: &str,
+    value: &str,
+    sensitive: Option<bool>,
+    partial: Option<&str>,
+    secret: Option<bool>,
+    deriving_key: &State<Arc<DerivingKey>>,
+) -> Result<String, String> {
+    let context = DeriveKeyContext::new(
+        table.to_string(),
+        column.to_string(),
+        match partial {
+            Some(variant) => DeriveKeyPurpose::PartialIndex(variant.to_string()),
+            None => match secret {
+                Some(true) => DeriveKeyPurpose::Secret,
+                Some(false) => DeriveKeyPurpose::ExactIndex,
+                None => DeriveKeyPurpose::ExactIndex,
+            },
+        },
+    );
+    let key = deriving_key.key(&context)?;
+    if secret == Some(true) {
+        Ok(format!(
+            "{}:{} column secret key is {}",
+            table,
+            column,
+            Base64UrlUnpadded::encode_string(&key)
         ))
-    }
-
-    fn opening_key(
-        &mut self,
-        nonce: [u8; aead::NONCE_LEN],
-    ) -> Result<aead::OpeningKey<OneNonceSequence>, String> {
-        let unbound = aead::UnboundKey::new(self.algorithm, &self.key_material)
-            .map_err(|_| "Could not create key")?;
-        let nonce = OneNonceSequence::new(nonce);
-        Ok(aead::BoundKey::new(unbound, nonce))
-    }
-}
-
-struct KeyedHash([u8; 32]);
-impl KeyedHash {
-    fn new(key: [u8; 32]) -> KeyedHash {
-        Self(key)
-    }
-    fn sign(&self, data: &[u8]) -> blake3::Hash {
-        blake3::keyed_hash(&self.0, data)
-    }
-    fn length(&self) -> usize {
-        blake3::OUT_LEN
-    }
-    fn verify(&self, data: &[u8], tag: [u8; 32]) -> Result<(), String> {
-        let hash = blake3::keyed_hash(&self.0, data);
-        let other = blake3::Hash::from(tag);
-        // This uses constant time comparison internally
-        if hash != other {
-            return Err("Invalid Signature".to_string());
-        }
-        Ok(())
+    } else {
+        let index = blind_index(
+            &key,
+            value.as_bytes(),
+            match sensitive {
+                Some(true) => IndexType::Sensitive,
+                Some(false) => IndexType::Fast,
+                None => IndexType::Fast,
+            },
+        )?;
+        Ok(format!(
+            "{}:{} column value \"{}\" is {}",
+            table,
+            column,
+            value,
+            Base64UrlUnpadded::encode_string(&index)
+        ))
     }
 }
 
@@ -308,6 +246,7 @@ fn rocket() -> _ {
     let rng = rand::SystemRandom::new();
     let encryption_key = load_or_random("ENCRYPTION_KEY", &rng).unwrap();
     let signing_key = load_or_random("SIGNING_KEY", &rng).unwrap();
+    let derivation_key = load_or_random("DERIVATION_KEY", &rng).unwrap();
     // let rng2 : &dyn rand::SecureRandom = &rng;
     // const KEY_LEN : usize = 32;
     // let mut key_bytes : [u8; KEY_LEN] = [0; KEY_LEN];
@@ -335,6 +274,7 @@ fn rocket() -> _ {
         // .manage(Arc::new(Mutex::new(sealing)))
         // .manage(Arc::new(Mutex::new(opening)))
         .manage(Arc::new(Mutex::new(sealing_state)))
+        .manage(Arc::new(DerivingKey::new(derivation_key)))
         .mount(
             "/",
             routes![
@@ -346,7 +286,8 @@ fn rocket() -> _ {
                 secretbox,
                 openbox,
                 password,
-                verify_password
+                verify_password,
+                table_value
             ],
         )
         .mount("/hello", routes![index])
