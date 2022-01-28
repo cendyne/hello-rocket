@@ -1,17 +1,17 @@
 #[macro_use]
 extern crate rocket;
-use argon2::{self, Config};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use ring::{aead, rand};
 use rocket::tokio::time::{sleep, Duration};
 use rocket::State;
 use std::env;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::vec;
 mod stuff;
 use stuff::blindindex::{blind_index, IndexType};
 use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
 use stuff::keyedhash::{sign_message, verify_message, KeyedHash};
+use stuff::password::{encode_password, verify_password};
 use stuff::secret::{open_secret, seal_secret, SealingState};
 
 #[get("/")]
@@ -50,11 +50,7 @@ fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, Stri
 }
 
 #[get("/secret/<param>/<aad>")]
-fn secretbox(
-    param: &str,
-    aad: &str,
-    encrypt: &State<Arc<SealingState>>,
-) -> Result<String, String> {
+fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Result<String, String> {
     let final_message = seal_secret(param.as_bytes(), aad.as_bytes(), &*encrypt)?;
 
     // let encoded = Base64::encode_string(message);
@@ -63,11 +59,7 @@ fn secretbox(
 }
 
 #[get("/open/<secret>/<aad>")]
-fn openbox(
-    secret: &str,
-    aad: &str,
-    encrypt: &State<Arc<SealingState>>,
-) -> Result<String, String> {
+fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Result<String, String> {
     let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
     // println!("Got message {:x?}", message);
     let decrypted = open_secret(&message[..], aad.as_bytes(), &*encrypt)?;
@@ -82,21 +74,14 @@ fn openbox(
 #[get("/password/<secret>")]
 fn password(secret: &str, rng: &State<rand::SystemRandom>) -> Result<String, String> {
     use rocket::http::RawStr;
-    let pwd = secret.as_bytes();
-    let salt: [u8; 16] = rand::generate(rng.inner())
-        .map_err(|_| "gen random failed")?
-        .expose();
-    let config = Config::default();
-    let encoded =
-        argon2::hash_encoded(pwd, &salt, &config).map_err(|_| "Could not encode password")?;
+    let encoded = encode_password(secret.as_bytes(), rng.inner())?;
     let encoded: &RawStr = RawStr::new(&encoded);
     Ok(format!("{}", RawStr::percent_encode(encoded)))
 }
 
 #[get("/verify-password/<secret>/<encoded>")]
-fn verify_password(secret: &str, encoded: &str) -> Result<String, String> {
-    let pwd = secret.as_bytes();
-    argon2::verify_encoded(encoded, pwd).map_err(|_| "Could not encode password")?;
+fn password_verify(secret: &str, encoded: &str) -> Result<String, String> {
+    verify_password(secret.as_bytes(), encoded)?;
     Ok(format!("{} is the password for {}", secret, encoded))
 }
 
@@ -234,7 +219,7 @@ fn rocket() -> _ {
                 secretbox,
                 openbox,
                 password,
-                verify_password,
+                password_verify,
                 table_value
             ],
         )

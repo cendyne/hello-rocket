@@ -1,6 +1,6 @@
 use crate::stuff::oncenonce::OneNonceSequence;
 use ring::{aead, rand};
-use std::sync::{Mutex};
+use std::sync::Mutex;
 
 pub struct SealingState {
     pub algorithm: &'static aead::Algorithm,
@@ -34,7 +34,10 @@ impl SealingState {
 
     fn next_nonce(&self) -> Result<[u8; aead::NONCE_LEN], String> {
         let mut nonce = [0; aead::NONCE_LEN];
-        let mut self_nonce = self.nonce.lock().map_err(|_| "Could not obtain encryption key")?;
+        let mut self_nonce = self
+            .nonce
+            .lock()
+            .map_err(|_| "Could not obtain encryption key")?;
 
         nonce.clone_from_slice(&*self_nonce);
         let mut refresh = false;
