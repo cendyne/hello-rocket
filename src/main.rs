@@ -6,7 +6,7 @@ use ring::{aead, rand};
 use rocket::tokio::time::{sleep, Duration};
 use rocket::State;
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::vec;
 mod stuff;
 use stuff::blindindex::{blind_index, IndexType};
@@ -53,13 +53,9 @@ fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, Stri
 fn secretbox(
     param: &str,
     aad: &str,
-    encrypt: &State<Arc<Mutex<SealingState>>>,
+    encrypt: &State<Arc<SealingState>>,
 ) -> Result<String, String> {
-    let mut encrypt_key = encrypt
-        .lock()
-        .map_err(|_| "Could not obtain encryption key")?;
-
-    let final_message = seal_secret(param.as_bytes(), aad.as_bytes(), &mut encrypt_key)?;
+    let final_message = seal_secret(param.as_bytes(), aad.as_bytes(), &*encrypt)?;
 
     // let encoded = Base64::encode_string(message);
     let encoded = Base64UrlUnpadded::encode_string(&final_message);
@@ -70,14 +66,11 @@ fn secretbox(
 fn openbox(
     secret: &str,
     aad: &str,
-    encrypt: &State<Arc<Mutex<SealingState>>>,
+    encrypt: &State<Arc<SealingState>>,
 ) -> Result<String, String> {
     let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
     // println!("Got message {:x?}", message);
-    let encrypt_key = encrypt
-        .lock()
-        .map_err(|_| "Could not obtain encryption key")?;
-    let decrypted = open_secret(&message[..], aad.as_bytes(), &*encrypt_key)?;
+    let decrypted = open_secret(&message[..], aad.as_bytes(), &*encrypt)?;
     let text = std::str::from_utf8(&decrypted[..]).map_err(|e| format!("{}", e))?;
     Ok(format!(
         "Secret is {} and length is {}",
@@ -228,7 +221,7 @@ fn rocket() -> _ {
         .manage(KeyedHash::new(signing_key))
         // .manage(Arc::new(Mutex::new(sealing)))
         // .manage(Arc::new(Mutex::new(opening)))
-        .manage(Arc::new(Mutex::new(sealing_state)))
+        .manage(Arc::new(sealing_state))
         .manage(Arc::new(DerivingKey::new(derivation_key)))
         .mount(
             "/",

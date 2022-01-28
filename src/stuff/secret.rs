@@ -1,11 +1,12 @@
 use crate::stuff::oncenonce::OneNonceSequence;
 use ring::{aead, rand};
+use std::sync::{Mutex};
 
 pub struct SealingState {
     pub algorithm: &'static aead::Algorithm,
     key_material: Vec<u8>,
     rng: rand::SystemRandom,
-    nonce: [u8; aead::NONCE_LEN],
+    nonce: Mutex<[u8; aead::NONCE_LEN]>,
 }
 
 pub struct SealingKeyWithNonce(
@@ -27,41 +28,43 @@ impl SealingState {
             algorithm,
             key_material,
             rng,
-            nonce: bytes,
+            nonce: Mutex::new(bytes),
         })
     }
 
-    fn next_nonce(&mut self) -> Result<[u8; aead::NONCE_LEN], String> {
+    fn next_nonce(&self) -> Result<[u8; aead::NONCE_LEN], String> {
         let mut nonce = [0; aead::NONCE_LEN];
-        nonce.clone_from_slice(&self.nonce);
+        let mut self_nonce = self.nonce.lock().map_err(|_| "Could not obtain encryption key")?;
+
+        nonce.clone_from_slice(&*self_nonce);
         let mut refresh = false;
         for i in [11, 10, 9, 8] {
-            if self.nonce[i] == 255 {
-                self.nonce[i] = 0;
+            if self_nonce[i] == 255 {
+                self_nonce[i] = 0;
                 if i == 8 {
                     refresh = true;
                     break;
                 }
             } else {
-                self.nonce[i] += 1;
+                self_nonce[i] += 1;
                 break;
             }
         }
         // Refresh nonce after 2^32 times
         if refresh {
             let rng2: &dyn rand::SecureRandom = &self.rng;
-            rng2.fill(&mut self.nonce[0..8])
+            rng2.fill(&mut self_nonce[0..8])
                 .map_err(|_| "Could not init nonce")?;
-            self.nonce[8] = 0;
-            self.nonce[9] = 0;
-            self.nonce[10] = 0;
-            self.nonce[11] = 0;
+            self_nonce[8] = 0;
+            self_nonce[9] = 0;
+            self_nonce[10] = 0;
+            self_nonce[11] = 0;
         }
-        println!("Next nonce: {:x?}", self.nonce);
+        // println!("Next nonce: {:x?}", self_nonce);
         Ok(nonce)
     }
 
-    pub fn sealing_key(&mut self) -> Result<SealingKeyWithNonce, String> {
+    pub fn sealing_key(&self) -> Result<SealingKeyWithNonce, String> {
         let unbound = aead::UnboundKey::new(self.algorithm, &self.key_material)
             .map_err(|_| "Could not create key")?;
         let next_nonce = self.next_nonce()?;
@@ -115,7 +118,7 @@ pub fn open_secret(
 pub fn seal_secret(
     message: &[u8],
     aad: &[u8],
-    encrypt_key: &mut SealingState,
+    encrypt_key: &SealingState,
 ) -> Result<Vec<u8>, String> {
     let additional_data = aead::Aad::from(aad);
     let mut cloned = vec![0; message.len()];
