@@ -15,7 +15,7 @@ pub struct SealingKeyWithNonce(
 );
 
 impl SealingState {
-    pub fn new(algorithm: &'static aead::Algorithm, key: &[u8]) -> Result<Self, String> {
+    pub fn new(key: &[u8]) -> Result<Self, String> {
         let rng = rand::SystemRandom::new();
         let mut bytes: [u8; 12] = [0; 12];
         let rng2: &dyn rand::SecureRandom = &rng;
@@ -25,7 +25,7 @@ impl SealingState {
         key_material.copy_from_slice(key);
 
         Ok(Self {
-            algorithm,
+            algorithm: &aead::CHACHA20_POLY1305,
             key_material,
             rng,
             nonce: Mutex::new(bytes),

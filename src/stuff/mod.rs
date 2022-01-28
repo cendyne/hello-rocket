@@ -1,5 +1,6 @@
 pub mod blindindex;
 pub mod derivekey;
+pub mod environment;
 pub mod keyedhash;
 pub mod oncenonce;
 pub mod password;

@@ -12,7 +12,7 @@ pub fn encode_password(password: &[u8], rng: &dyn rand::SecureRandom) -> Result<
 }
 pub fn verify_password(password: &[u8], encoded_password: &str) -> Result<(), String> {
     let verified = argon2::verify_encoded(encoded_password, password)
-    .map_err(|_| "Password format failure")?;
+        .map_err(|_| "Password format failure")?;
     if verified {
         Ok(())
     } else {
