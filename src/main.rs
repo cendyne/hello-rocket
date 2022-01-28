@@ -11,7 +11,7 @@ use std::vec;
 mod stuff;
 use stuff::blindindex::{blind_index, IndexType};
 use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
-use stuff::keyedhash::KeyedHash;
+use stuff::keyedhash::{sign_message, verify_message, KeyedHash};
 use stuff::secret::{open_secret, seal_secret, SealingState};
 
 #[get("/")]
@@ -35,28 +35,17 @@ fn rando(rng: &State<rand::SystemRandom>) -> Result<String, String> {
 }
 
 #[get("/sign/<param>")]
-fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> String {
-    let tag = hmac_key.sign(param.as_bytes());
-    let mut message = vec![];
-    message.extend_from_slice(param.as_bytes());
-    message.extend_from_slice(tag.as_bytes());
+fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
+    let message = sign_message(param.as_bytes(), &*hmac_key)?;
     let encoded = Base64UrlUnpadded::encode_string(&message);
-    format!("{} -> {}", param, encoded)
+    Ok(format!("{} -> {}", param, encoded))
 }
 
 #[get("/verify/<param>")]
 fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
     let message = Base64UrlUnpadded::decode_vec(param).map_err(|_| "Invalid Base64 input")?;
-    let hash_length = hmac_key.length();
-    let message_length = message.len();
-    if message_length <= hash_length {
-        return Err("Insufficient Length".to_string());
-    }
-    let length = message_length - hash_length;
-    let mut tag: [u8; 32] = [0; 32];
-    tag.copy_from_slice(&message[length..length + 32]);
-    hmac_key.verify(&message[0..length], tag)?;
-    let text = std::str::from_utf8(&message[0..length]).map_err(|e| format!("{}", e))?;
+    let content = verify_message(&message, &*hmac_key)?;
+    let text = std::str::from_utf8(content).map_err(|e| format!("{}", e))?;
     Ok(format!("{} -> {}", param, text))
 }
 
