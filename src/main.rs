@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate rocket;
 use base64ct::{Base64UrlUnpadded, Encoding};
-use ring::{rand};
+use ring::rand;
 use rocket::tokio::time::{sleep, Duration};
 use rocket::State;
 use std::sync::Arc;
@@ -9,10 +9,11 @@ use std::vec;
 mod stuff;
 use stuff::blindindex::{blind_index, IndexType};
 use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
+use stuff::environment::load_or_random;
 use stuff::keyedhash::{sign_message, verify_message, KeyedHash};
+use stuff::padding::PaddingState;
 use stuff::password::{encode_password, verify_password};
 use stuff::secret::{open_secret, seal_secret, SealingState};
-use stuff::environment::{load_or_random};
 
 #[get("/")]
 fn index() -> &'static str {
@@ -85,6 +86,28 @@ fn password_verify(secret: &str, encoded: &str) -> Result<String, String> {
     Ok(format!("{} is the password for {}", secret, encoded))
 }
 
+#[get("/pad-message/<message>/<len>")]
+fn pad_message_handler(
+    message: &str,
+    len: usize,
+    padding: &State<Arc<PaddingState>>,
+) -> Result<String, String> {
+    let result = padding.pad(message.as_bytes(), len)?;
+    Ok(format!(
+        "message {} padded to {}",
+        message,
+        Base64UrlUnpadded::encode_string(&result)
+    ))
+}
+
+#[get("/unpad-message/<message>")]
+fn unpad_message_handler(message: &str) -> Result<String, String> {
+    let decoded = Base64UrlUnpadded::decode_vec(message).map_err(|_| "Could not decode")?;
+    let result = PaddingState::unpad(&decoded[..])?;
+    let text = std::str::from_utf8(result).map_err(|e| format!("{}", e))?;
+    Ok(format!("message {} unpadded to {}", message, text))
+}
+
 #[get("/table/<table>/<column>/<value>?<sensitive>&<partial>&<secret>")]
 fn table_value(
     table: &str,
@@ -143,14 +166,15 @@ fn rocket() -> _ {
     let encryption_key = load_or_random("ENCRYPTION_KEY", &rng).unwrap();
     let signing_key = load_or_random("SIGNING_KEY", &rng).unwrap();
     let derivation_key = load_or_random("DERIVATION_KEY", &rng).unwrap();
-    let sealing_state = SealingState::new(&encryption_key)
-        .expect("Encryption key failed to set up");
+    let sealing_state =
+        SealingState::new(&encryption_key).expect("Encryption key failed to set up");
 
     rocket::build()
         .manage(rng)
         .manage(KeyedHash::new(signing_key))
         .manage(Arc::new(sealing_state))
         .manage(Arc::new(DerivingKey::new(derivation_key)))
+        .manage(Arc::new(PaddingState::new()))
         .mount(
             "/",
             routes![
@@ -163,6 +187,8 @@ fn rocket() -> _ {
                 openbox,
                 password,
                 password_verify,
+                pad_message_handler,
+                unpad_message_handler,
                 table_value
             ],
         )
