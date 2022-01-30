@@ -32,6 +32,7 @@ pub type DerivedKey = [u8; 32];
 #[derive(Clone, Hash, Debug)]
 pub struct DeriveKeyResult {
     key: DerivedKey,
+    // TODO consider Sealing State
 }
 unsafe impl Sync for DeriveKeyResult {}
 unsafe impl Send for DeriveKeyResult {}

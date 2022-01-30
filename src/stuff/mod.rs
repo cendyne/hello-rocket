@@ -6,3 +6,4 @@ pub mod oncenonce;
 pub mod padding;
 pub mod password;
 pub mod secret;
+pub mod bloom;

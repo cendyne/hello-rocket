@@ -14,6 +14,7 @@ use stuff::keyedhash::{sign_message, verify_message, KeyedHash};
 use stuff::padding::PaddingState;
 use stuff::password::{encode_password, verify_password};
 use stuff::secret::{open_secret, seal_secret, SealingState};
+use stuff::bloom::secret_match;
 
 #[get("/")]
 fn index() -> &'static str {
@@ -39,7 +40,9 @@ fn rando(rng: &State<rand::SystemRandom>) -> Result<String, String> {
 fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
     let message = sign_message(param.as_bytes(), &*hmac_key)?;
     let encoded = Base64UrlUnpadded::encode_string(&message);
-    Ok(format!("{} -> {}", param, encoded))
+    let small_bloom = hmac_key.sign_truncated_u32(&message);
+    let bigger_bloom = hmac_key.sign_truncated_u64(&message);
+    Ok(format!("{} -> {}\nu32 -> {}\nu64 -> {}", param, encoded, small_bloom, bigger_bloom))
 }
 
 #[get("/verify/<param>")]
@@ -106,6 +109,16 @@ fn unpad_message_handler(message: &str) -> Result<String, String> {
     let result = PaddingState::unpad(&decoded[..])?;
     let text = std::str::from_utf8(result).map_err(|e| format!("{}", e))?;
     Ok(format!("message {} unpadded to {}", message, text))
+}
+
+#[get("/match-message/<message>/<secret>/<aad>")]
+fn match_message_handler(message: &str, secret: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Result<String, String> {
+    let decoded = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
+    if secret_match(message.as_bytes(), aad.as_bytes(), &decoded, encrypt)? {
+        Ok(format!("message {} matches secret {}", message, secret))
+    } else {
+        Ok(format!("message {} does not match secret {}", message, secret))
+    }   
 }
 
 #[get("/table/<table>/<column>/<value>?<sensitive>&<partial>&<secret>")]
@@ -189,6 +202,7 @@ fn rocket() -> _ {
                 password_verify,
                 pad_message_handler,
                 unpad_message_handler,
+                match_message_handler,
                 table_value
             ],
         )
