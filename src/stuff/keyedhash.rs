@@ -9,14 +9,14 @@ impl KeyedHash {
     pub fn sign_truncated_u64(&self, data: &[u8]) -> u64 {
         let hash = self.sign(data);
         let hash_bytes = hash.as_bytes();
-        let mut be_bytes : [u8; 8] = [0; 8];
+        let mut be_bytes: [u8; 8] = [0; 8];
         be_bytes.copy_from_slice(&hash_bytes[0..8]);
         u64::from_be_bytes(be_bytes)
     }
     pub fn sign_truncated_u32(&self, data: &[u8]) -> u32 {
         let hash = self.sign(data);
         let hash_bytes = hash.as_bytes();
-        let mut be_bytes : [u8; 4] = [0; 4];
+        let mut be_bytes: [u8; 4] = [0; 4];
         be_bytes.copy_from_slice(&hash_bytes[0..4]);
         u32::from_be_bytes(be_bytes)
     }

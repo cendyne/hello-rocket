@@ -1,10 +1,11 @@
-use base64ct::{Base64UrlUnpadded, Encoding};
+use ct_codecs::{Base64UrlSafeNoPadding, Decoder, Encoder};
+
 use ring::rand;
 use std::env;
 
 fn load_key(var: &str) -> Result<[u8; 32], String> {
     let res = env::var(var).map_err(|e| format!("Failed to load {}: {}", var, e))?;
-    let message = Base64UrlUnpadded::decode_vec(&res)
+    let message = Base64UrlSafeNoPadding::decode_to_vec(res, None)
         .map_err(|_| format!("Failed to load {}, expected base64 string", var))?;
     if message.len() == 32 {
         let mut result: [u8; 32] = [0; 32];
@@ -33,7 +34,7 @@ pub fn load_or_random(var: &str, rng: &dyn rand::SecureRandom) -> Result<[u8; 32
         println!(
             "Consider setting {}={} in the environment or .env file",
             var,
-            Base64UrlUnpadded::encode_string(&key)
+            Base64UrlSafeNoPadding::encode_to_string(key).map_err(|e| format!("{}", e))?
         );
         Ok(key)
     })

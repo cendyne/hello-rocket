@@ -1,20 +1,20 @@
 #[macro_use]
 extern crate rocket;
-use base64ct::{Base64UrlUnpadded, Encoding};
 use ring::rand;
 use rocket::tokio::time::{sleep, Duration};
 use rocket::State;
 use std::sync::Arc;
 use std::vec;
 mod stuff;
+use ct_codecs::{Base64UrlSafeNoPadding, Decoder, Encoder};
 use stuff::blindindex::{blind_index, IndexType};
+use stuff::bloom::secret_match;
 use stuff::derivekey::{DeriveKeyContext, DeriveKeyPurpose, DerivingKey};
 use stuff::environment::load_or_random;
 use stuff::keyedhash::{sign_message, verify_message, KeyedHash};
 use stuff::padding::PaddingState;
 use stuff::password::{encode_password, verify_password};
 use stuff::secret::{open_secret, seal_secret, SealingState};
-use stuff::bloom::secret_match;
 
 #[get("/")]
 fn index() -> &'static str {
@@ -32,22 +32,28 @@ fn rando(rng: &State<rand::SystemRandom>) -> Result<String, String> {
     let key_value: [u8; 32] = rand::generate(rng.inner())
         .map_err(|_| "gen random failed")?
         .expose();
-    let encoded = Base64UrlUnpadded::encode_string(&key_value);
+    let encoded =
+        Base64UrlSafeNoPadding::encode_to_string(&key_value).map_err(|e| format!("{}", e))?;
     Ok(encoded)
 }
 
 #[get("/sign/<param>")]
 fn sign_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
     let message = sign_message(param.as_bytes(), &*hmac_key)?;
-    let encoded = Base64UrlUnpadded::encode_string(&message);
+    let encoded =
+        Base64UrlSafeNoPadding::encode_to_string(&message).map_err(|e| format!("{}", e))?;
     let small_bloom = hmac_key.sign_truncated_u32(&message);
     let bigger_bloom = hmac_key.sign_truncated_u64(&message);
-    Ok(format!("{} -> {}\nu32 -> {}\nu64 -> {}", param, encoded, small_bloom, bigger_bloom))
+    Ok(format!(
+        "{} -> {}\nu32 -> {}\nu64 -> {}",
+        param, encoded, small_bloom, bigger_bloom
+    ))
 }
 
 #[get("/verify/<param>")]
 fn verify_thing(param: &str, hmac_key: &State<KeyedHash>) -> Result<String, String> {
-    let message = Base64UrlUnpadded::decode_vec(param).map_err(|_| "Invalid Base64 input")?;
+    let message = Base64UrlSafeNoPadding::decode_to_vec(param, None)
+        .map_err(|_| "Invalid Base64 input".to_string())?;
     let content = verify_message(&message, &*hmac_key)?;
     let text = std::str::from_utf8(content).map_err(|e| format!("{}", e))?;
     Ok(format!("{} -> {}", param, text))
@@ -58,13 +64,15 @@ fn secretbox(param: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Resu
     let final_message = seal_secret(param.as_bytes(), aad.as_bytes(), &*encrypt)?;
 
     // let encoded = Base64::encode_string(message);
-    let encoded = Base64UrlUnpadded::encode_string(&final_message);
+    let encoded =
+        Base64UrlSafeNoPadding::encode_to_string(&final_message).map_err(|e| format!("{}", e))?;
     Ok(format!("Secret is {} and result: {}", param, encoded))
 }
 
 #[get("/open/<secret>/<aad>")]
 fn openbox(secret: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Result<String, String> {
-    let message = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
+    let message = Base64UrlSafeNoPadding::decode_to_vec(secret, None)
+        .map_err(|_| "Invalid Base64 input".to_string())?;
     // println!("Got message {:x?}", message);
     let decrypted = open_secret(&message[..], aad.as_bytes(), &*encrypt)?;
     let text = std::str::from_utf8(&decrypted[..]).map_err(|e| format!("{}", e))?;
@@ -99,26 +107,36 @@ fn pad_message_handler(
     Ok(format!(
         "message {} padded to {}",
         message,
-        Base64UrlUnpadded::encode_string(&result)
+        Base64UrlSafeNoPadding::encode_to_string(result).map_err(|e| format!("{}", e))?
     ))
 }
 
 #[get("/unpad-message/<message>")]
 fn unpad_message_handler(message: &str) -> Result<String, String> {
-    let decoded = Base64UrlUnpadded::decode_vec(message).map_err(|_| "Could not decode")?;
+    let decoded = Base64UrlSafeNoPadding::decode_to_vec(message, None)
+        .map_err(|_| "Invalid Base64 input".to_string())?;
     let result = PaddingState::unpad(&decoded[..])?;
     let text = std::str::from_utf8(result).map_err(|e| format!("{}", e))?;
     Ok(format!("message {} unpadded to {}", message, text))
 }
 
 #[get("/match-message/<message>/<secret>/<aad>")]
-fn match_message_handler(message: &str, secret: &str, aad: &str, encrypt: &State<Arc<SealingState>>) -> Result<String, String> {
-    let decoded = Base64UrlUnpadded::decode_vec(secret).map_err(|_| "Could not decode")?;
+fn match_message_handler(
+    message: &str,
+    secret: &str,
+    aad: &str,
+    encrypt: &State<Arc<SealingState>>,
+) -> Result<String, String> {
+    let decoded = Base64UrlSafeNoPadding::decode_to_vec(secret, None)
+        .map_err(|_| "Invalid Base64 input".to_string())?;
     if secret_match(message.as_bytes(), aad.as_bytes(), &decoded, encrypt)? {
         Ok(format!("message {} matches secret {}", message, secret))
     } else {
-        Ok(format!("message {} does not match secret {}", message, secret))
-    }   
+        Ok(format!(
+            "message {} does not match secret {}",
+            message, secret
+        ))
+    }
 }
 
 #[get("/table/<table>/<column>/<value>?<sensitive>&<partial>&<secret>")]
@@ -149,7 +167,7 @@ fn table_value(
             "{}:{} column secret key is {}",
             table,
             column,
-            Base64UrlUnpadded::encode_string(&key)
+            Base64UrlSafeNoPadding::encode_to_string(key).map_err(|e| format!("{}", e))?
         ))
     } else {
         let index = blind_index(
@@ -166,7 +184,7 @@ fn table_value(
             table,
             column,
             value,
-            Base64UrlUnpadded::encode_string(&index)
+            Base64UrlSafeNoPadding::encode_to_string(index).map_err(|e| format!("{}", e))?
         ))
     }
 }

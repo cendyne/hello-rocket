@@ -1,4 +1,5 @@
 pub mod blindindex;
+pub mod bloom;
 pub mod derivekey;
 pub mod environment;
 pub mod keyedhash;
@@ -6,4 +7,3 @@ pub mod oncenonce;
 pub mod padding;
 pub mod password;
 pub mod secret;
-pub mod bloom;
